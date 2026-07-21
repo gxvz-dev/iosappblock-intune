@@ -1,0 +1,4 @@
+# Raw Intune tenant exports - NEVER commit. These contain conditional access
+# policies, role definitions, group GUIDs and assignment filters.
+20*/
+*.export.json
