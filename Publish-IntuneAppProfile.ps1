@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-    Creates the blocked-apps Settings Catalog profile in Intune from the JSON
-    body, deliberately UNASSIGNED so it affects no devices until you assign it.
+    Creates an app-access Settings Catalog profile (blocklist or allowlist) in
+    Intune from the JSON body, deliberately UNASSIGNED so it affects no devices
+    until you assign it.
 
 .DESCRIPTION
     Intune has no portal import for Settings Catalog profiles, so the JSON has
@@ -31,14 +32,19 @@
     Create even if a profile with the same name already exists.
 
 .EXAMPLE
-    .\Publish-IntuneBlockedAppProfile.ps1 -DryRun
+    .\Publish-IntuneAppProfile.ps1 -DryRun
 
     Validate the payload and see what would be sent. Always start here.
 
 .EXAMPLE
-    .\Publish-IntuneBlockedAppProfile.ps1 -Name 'iOS - Blocked Applications (PILOT)'
+    .\Publish-IntuneAppProfile.ps1 -Name 'iOS - Blocked Applications (PILOT)'
 
     Create an unassigned pilot profile. Assign it to a test group in the portal.
+
+.EXAMPLE
+    .\Publish-IntuneAppProfile.ps1 -JsonPath .\iOS-Allowed-Applications.json -DryRun
+
+    Validate an allowlist body produced by New-IntuneAppProfile -Mode Allow.
 
 .NOTES
     Requires Microsoft.Graph.Authentication and the
@@ -86,9 +92,16 @@ if ($gsc  -isnot [array])         { throw "'groupSettingCollectionValue' is not 
 if ($kids -isnot [array])         { throw "'children' is not an array." }
 if ($vals -isnot [array])         { throw "'simpleSettingCollectionValue' is not an array." }
 
-if ($kids[0].settingDefinitionId -ne 'com.apple.applicationaccess_blockedappbundleids') {
+$knownSettingIds = @(
+    'com.apple.applicationaccess_blockedappbundleids'
+    'com.apple.applicationaccess_allowedappbundleids'
+)
+if ($kids[0].settingDefinitionId -notin $knownSettingIds) {
     throw "Unexpected settingDefinitionId: $($kids[0].settingDefinitionId)"
 }
+# An allowlist is the sharper knife: only listed apps can run on targeted
+# devices. Make sure the operator notices which kind they are shipping.
+$flavor = if ($kids[0].settingDefinitionId -like '*allowed*') { 'ALLOWLIST' } else { 'blocklist' }
 
 if ($Name) {
     $obj.name = $Name
@@ -99,14 +112,20 @@ Write-Host ""
 Write-Host "Payload validated." -ForegroundColor Green
 Write-Host "  Name      : $($obj.name)"
 Write-Host "  Platform  : $($obj.platforms)  ($($obj.technologies))"
-Write-Host "  Blocked   : $($vals.Count) bundle ID(s)"
+Write-Host "  Kind      : $flavor"
+Write-Host "  Apps      : $($vals.Count) bundle ID(s)"
 Write-Host "  Body size : $($raw.Length) bytes"
 Write-Host "  Endpoint  : POST https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
+
+if ($flavor -eq 'ALLOWLIST') {
+    Write-Warning ("This is an ALLOWLIST: once assigned, ONLY these $($vals.Count) app(s) " +
+        "can run on targeted supervised devices. Pilot on a test device first.")
+}
 
 if ($DryRun) {
     Write-Host ""
     Write-Host "DRY RUN - nothing was sent and no connection was made." -ForegroundColor Yellow
-    Write-Host "First 5 blocked bundle IDs:"
+    Write-Host "First 5 bundle IDs:"
     $vals.value | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" }
     return
 }

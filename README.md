@@ -87,7 +87,7 @@ across the most queries - search-derived, not Apple-curated. Feed either
 straight to the profile builder:
 
 ```powershell
-.\New-IntuneBlockedAppProfile.ps1 -InputFile .\bundle-ids-vpn.csv -Name 'iOS - Blocked VPN Apps'
+.\New-IntuneAppProfile.ps1 -InputFile .\bundle-ids-vpn.csv -Name 'iOS - Blocked VPN Apps'
 ```
 
 ## The tools
@@ -97,8 +97,8 @@ Three scripts, separated by what they touch:
 | Script | Touches | Purpose |
 | --- | --- | --- |
 | [`Get-AppStoreBundleId.ps1`](Get-AppStoreBundleId.ps1) | Apple's public API; your list CSV with -SaveTo | Search, resolve, drift-check, and save picks to a list |
-| [`New-IntuneBlockedAppProfile.ps1`](New-IntuneBlockedAppProfile.ps1) | A local file | Turn links/IDs/lists into a deployable profile |
-| [`Publish-IntuneBlockedAppProfile.ps1`](Publish-IntuneBlockedAppProfile.ps1) | Your Intune tenant | POST the profile, with safety checks |
+| [`New-IntuneAppProfile.ps1`](New-IntuneAppProfile.ps1) | A local file | Turn links/IDs/lists into a deployable profile |
+| [`Publish-IntuneAppProfile.ps1`](Publish-IntuneAppProfile.ps1) | Your Intune tenant | POST the profile, with safety checks |
 
 Windows PowerShell 5.1+, no modules or auth needed except Graph for the final
 publish step.
@@ -120,14 +120,14 @@ verified entries (`Status OK`) are ever written. The list then feeds the
 profile builder directly:
 
 ```powershell
-.\New-IntuneBlockedAppProfile.ps1 -InputFile .\bundle-ids-gambling.csv `
+.\New-IntuneAppProfile.ps1 -InputFile .\bundle-ids-gambling.csv `
     -Name 'iOS - Blocked Gambling Apps'
 ```
 
 ### Dump App Store links, get a profile
 
 ```powershell
-.\New-IntuneBlockedAppProfile.ps1 -AppStoreUrl `
+.\New-IntuneAppProfile.ps1 -AppStoreUrl `
     'https://apps.apple.com/us/app/tinder-dating-app/id547702041',
     'https://apps.apple.com/us/app/bumble-dating-app/id930441707'
 ```
@@ -140,6 +140,40 @@ looks like coverage in the portal.
 Nothing here is dating-specific. One tip when searching: do not filter on
 genre - the App Store assigns it inconsistently (Tinder is Lifestyle, Plenty
 of Fish is Social Networking).
+
+### Beyond blocking: everything else a bundle ID can drive
+
+`New-IntuneAppProfile.ps1` builds four policies from the same inputs:
+
+| Policy | Command | Output |
+| --- | --- | --- |
+| Blocklist (default) | `-Mode Block` | Graph body or `.mobileconfig` |
+| **Allowlist** | `-Mode Allow` | Graph body or `.mobileconfig` |
+| Silence notifications | `-Payload NotificationSilence` | `.mobileconfig` |
+| Single-app kiosk | `-Payload SingleAppLock` | `.mobileconfig` |
+
+```powershell
+# Only approved apps may run - feed it YOUR approved list, not a category list
+.\New-IntuneAppProfile.ps1 -InputFile .\approved-apps.csv -Mode Allow
+
+# Softer control: the apps still run, their notifications do not
+.\New-IntuneAppProfile.ps1 -InputFile .\bundle-ids.csv -Payload NotificationSilence
+
+# Kiosk: lock supervised devices into exactly one app
+.\New-IntuneAppProfile.ps1 -AppId 361309726 -Payload SingleAppLock
+```
+
+Two warnings that matter:
+
+- **An allowlist is the sharper knife.** Once assigned, *only* the listed apps
+  can run - everything else disappears, including most built-in apps. Apple
+  treats `blockedAppBundleIDs` and `allowedAppBundleIDs` as mutually
+  exclusive: deploy one or the other, never both. Pilot on a test device.
+- All of these payloads require **supervised** devices, same as blocking.
+
+`.mobileconfig` outputs upload under `Templates > Custom`; Graph bodies go
+through `Publish-IntuneAppProfile.ps1`, which detects which kind it is
+shipping and warns loudly on allowlists.
 
 ### Drift-check the list
 
@@ -190,8 +224,8 @@ is the ready-to-POST body (setting definition
 contains no tenant identifiers or assignments.
 
 ```powershell
-.\Publish-IntuneBlockedAppProfile.ps1 -DryRun                                  # validate offline
-.\Publish-IntuneBlockedAppProfile.ps1 -Name 'iOS - Blocked Applications (PILOT)'
+.\Publish-IntuneAppProfile.ps1 -DryRun                                  # validate offline
+.\Publish-IntuneAppProfile.ps1 -Name 'iOS - Blocked Applications (PILOT)'
 ```
 
 The script validates the payload before connecting, refuses duplicate profile
@@ -206,7 +240,7 @@ uploads under `Devices > iOS/iPadOS > Configuration > Templates > Custom`
 (Device channel). Regenerate it with your own identifier prefix first:
 
 ```powershell
-.\New-IntuneBlockedAppProfile.ps1 -InputFile .\bundle-ids.csv -Format MobileConfig `
+.\New-IntuneAppProfile.ps1 -InputFile .\bundle-ids.csv -Format MobileConfig `
     -PayloadIdentifierPrefix 'com.yourorg.restrictions'
 ```
 
@@ -238,5 +272,6 @@ the list means regenerate and re-upload.
 
 MIT. Bundle IDs are public facts about published apps; app names and trademarks
 belong to their respective owners.
+
 
 
