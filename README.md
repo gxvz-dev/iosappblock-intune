@@ -50,8 +50,8 @@ deduplicated, with every bundle ID verified against the iTunes Lookup API on
 | Tinder Dating App: Date & Chat | `com.cardify.tinder` | 547702041 |
 | Zoe: Lesbian Dating & Chat | `com.surgeapp.zoe` | 1269081011 |
 
-Machine-readable: [`bundle-ids.txt`](bundle-ids.txt) and
-[`bundle-ids.csv`](bundle-ids.csv).
+Machine-readable: [`bundle-ids.csv`](bundle-ids.csv) - the same list, and the
+file every tool here reads and writes.
 
 Apple's curation is the scope on purpose: it is an externally-owned definition
 of "top dating apps" rather than anyone's personal judgment. It skews toward
@@ -64,18 +64,59 @@ bundle ID behind: happn is `fr.ftw-and-co.whoozer`, Feeld is
 `com.coffeemeetsbagel`, which looks perfectly plausible, resolves to nothing).
 Verify; never infer.
 
+## Other categories
+
+Two more lists, built with this repo's own `-Search` tooling, 25 apps each:
+
+- [`bundle-ids-gambling.csv`](bundle-ids-gambling.csv) - real-money casino,
+  sportsbook and fantasy apps (DraftKings, FanDuel, BetMGM, bet365, Stake, ...)
+- [`bundle-ids-vpn.csv`](bundle-ids-vpn.csv) - VPN and proxy clients
+  (NordVPN, ExpressVPN, Proton VPN, Surfshark, Psiphon, ...), commonly blocked
+  to stop devices bypassing web filtering
+
+Sourcing differs from the dating list and is worth being clear about: Apple
+publishes no editorial collection for these categories, so these were built by
+sweeping multiple App Store search terms and keeping the apps that surfaced
+across the most queries - search-derived, not Apple-curated. Feed either
+straight to the profile builder:
+
+```powershell
+.\New-IntuneBlockedAppProfile.ps1 -InputFile .\bundle-ids-vpn.csv -Name 'iOS - Blocked VPN Apps'
+```
+
 ## The tools
 
 Three scripts, separated by what they touch:
 
 | Script | Touches | Purpose |
 | --- | --- | --- |
-| [`Get-AppStoreBundleId.ps1`](Get-AppStoreBundleId.ps1) | Apple's public API (read-only) | Search apps, resolve IDs, drift-check a list |
-| [`New-IntuneBlockedAppProfile.ps1`](New-IntuneBlockedAppProfile.ps1) | A local file | Turn links/IDs into a deployable profile |
+| [`Get-AppStoreBundleId.ps1`](Get-AppStoreBundleId.ps1) | Apple's public API; your list CSV with -SaveTo | Search, resolve, drift-check, and save picks to a list |
+| [`New-IntuneBlockedAppProfile.ps1`](New-IntuneBlockedAppProfile.ps1) | A local file | Turn links/IDs/lists into a deployable profile |
 | [`Publish-IntuneBlockedAppProfile.ps1`](Publish-IntuneBlockedAppProfile.ps1) | Your Intune tenant | POST the profile, with safety checks |
 
 Windows PowerShell 5.1+, no modules or auth needed except Graph for the final
 publish step.
+
+### Search, pick, save - no copy-pasting
+
+The whole loop from "what's out there" to "in my list" is one command. `-Pick`
+opens a grid (type in its filter box to narrow, Ctrl/Shift-click rows, OK);
+`-SaveTo` stores your selections:
+
+```powershell
+.\Get-AppStoreBundleId.ps1 -Search 'gambling' -Limit 100 -Pick -SaveTo .\bundle-ids-gambling.csv
+```
+
+The CSV is the storage - the one file per category, and the one the tools read
+and write. Saving merges: nothing already in the list is duplicated or
+overwritten, so re-running with new search terms just grows the file, and only
+verified entries (`Status OK`) are ever written. The list then feeds the
+profile builder directly:
+
+```powershell
+.\New-IntuneBlockedAppProfile.ps1 -InputFile .\bundle-ids-gambling.csv `
+    -Name 'iOS - Blocked Gambling Apps'
+```
 
 ### Dump App Store links, get a profile
 
@@ -86,24 +127,18 @@ publish step.
 ```
 
 Accepts store URLs (any storefront), numeric App Store IDs, bundle IDs, or a
-file with one per line (`-InputFile .\bundle-ids.txt`). Inputs that fail to
-resolve are reported and **excluded** - an unverified entry is a silent gap that
-still looks like coverage in the portal.
+list CSV (`-InputFile .\bundle-ids.csv`). Inputs that fail to resolve are
+reported and **excluded** - an unverified entry is a silent gap that still
+looks like coverage in the portal.
 
-### Build a list for any category
-
-```powershell
-.\Get-AppStoreBundleId.ps1 -Search 'gambling' -Limit 100 |
-    Sort-Object BundleId -Unique | Format-Table Name, BundleId
-```
-
-Nothing here is dating-specific. Do not filter on genre - the App Store assigns
-it inconsistently (Tinder is Lifestyle, Plenty of Fish is Social Networking).
+Nothing here is dating-specific. One tip when searching: do not filter on
+genre - the App Store assigns it inconsistently (Tinder is Lifestyle, Plenty
+of Fish is Social Networking).
 
 ### Drift-check the list
 
 ```powershell
-.\Get-AppStoreBundleId.ps1 -BundleId (Get-Content .\bundle-ids.txt) |
+.\Get-AppStoreBundleId.ps1 -BundleId (Import-Csv .\bundle-ids.csv).BundleId |
     Where-Object Status -ne 'OK'
 ```
 
@@ -112,13 +147,34 @@ run this before trusting any bundle ID list, this one included.
 
 ## Deploying
 
-**Intune has no file import for Settings Catalog profiles.** Three real paths:
+**Intune has no file import for a whole Settings Catalog profile** - but the
+Blocked App Bundle IDs *setting* has one (see the CSV import path below). Three
+real paths:
 
 | Path | Effort | Result |
 | --- | --- | --- |
-| Graph POST (recommended) | One command | Real Settings Catalog profile, editable in the UI |
+| Portal CSV import | Create profile, upload CSV | Real Settings Catalog profile, editable in the UI |
+| Graph POST | One command | Same result, fully scripted end to end |
 | `.mobileconfig` upload | One file upload | Works immediately, but an opaque blob in the portal |
-| Portal by hand | 25 paste operations | Same as the POST, no scripting |
+
+### Portal CSV import (no scripting)
+
+The Settings Catalog collection editor has an **Import** button that takes a
+CSV of values, so the list goes in as one upload instead of one paste per app:
+
+```
+Devices > iOS/iPadOS > Configuration > Create > New policy
+  Profile type : Settings catalog
+  + Add settings > search "Blocked App Bundle IDs"  (category: Restrictions)
+  On the setting, choose Import and upload the CSV
+```
+
+The import wants bundle IDs only. If the portal rejects the three-column list
+file, produce a bare single-column CSV from it first:
+
+```powershell
+(Import-Csv .\bundle-ids.csv).BundleId | Set-Content .\import.csv
+```
 
 ### Graph POST
 
@@ -144,7 +200,7 @@ uploads under `Devices > iOS/iPadOS > Configuration > Templates > Custom`
 (Device channel). Regenerate it with your own identifier prefix first:
 
 ```powershell
-.\New-IntuneBlockedAppProfile.ps1 -InputFile .\bundle-ids.txt -Format MobileConfig `
+.\New-IntuneBlockedAppProfile.ps1 -InputFile .\bundle-ids.csv -Format MobileConfig `
     -PayloadIdentifierPrefix 'com.yourorg.restrictions'
 ```
 
@@ -176,3 +232,5 @@ the list means regenerate and re-upload.
 
 MIT. Bundle IDs are public facts about published apps; app names and trademarks
 belong to their respective owners.
+
+

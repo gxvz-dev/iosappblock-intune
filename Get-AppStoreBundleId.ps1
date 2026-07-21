@@ -1,24 +1,26 @@
 <#
 .SYNOPSIS
-    Queries Apple's public iTunes API to look up app bundle IDs and to verify
-    bundle IDs you already have.
+    Finds iOS apps and their bundle IDs via Apple's public iTunes API, and can
+    save what you choose straight into a list CSV.
 
 .DESCRIPTION
-    Read-only. Three modes:
+    Read-only against Apple; optionally writes your list file. Three modes:
 
-      -Search   Free-text App Store search. Discover apps in any category -
-                this is not limited to the list this repo ships.
-      -AppId    Look up App Store numeric IDs (the digits in a store URL) and
-                return the bundle ID for each.
-      -BundleId Reverse-check bundle IDs you already have. Catches typos,
-                delisted apps, and identifiers reassigned to a different app.
+      -Search   Free-text App Store search, any category.
+      -AppId    Look up App Store numeric IDs (the digits in a store URL).
+      -BundleId Reverse-check bundle IDs you already have - the drift check
+                for a maintained list. Catches typos, delisted apps, and
+                reassigned identifiers.
 
-    The last mode is the drift check for a maintained list: an entry that no
-    longer resolves is a silent gap that still looks like coverage in the
-    Intune portal.
+    Two switches turn a search into a saved list with no copy-pasting:
 
-    No authentication, no app registration, no Graph permissions. The iTunes
-    API is public and read-only.
+      -Pick     Show results in a grid (filter box, Ctrl/Shift-click rows,
+                OK). Only your selections continue.
+      -SaveTo   Merge results into a CSV (BundleId,TrackId,Name). Existing
+                entries are never duplicated or overwritten; re-running is a
+                no-op. The CSV feeds New-IntuneBlockedAppProfile.ps1 directly.
+
+    No authentication, no app registration, no Graph permissions.
 
 .PARAMETER Search
     One or more free-text search terms, e.g. 'dating', 'gambling', 'vpn'.
@@ -29,39 +31,44 @@
 .PARAMETER BundleId
     One or more bundle IDs to verify, e.g. com.cardify.tinder.
 
+.PARAMETER Pick
+    Choose interactively from the results in an Out-GridView grid before
+    anything is emitted or saved.
+
+.PARAMETER SaveTo
+    CSV list file to merge results (or your -Pick selections) into. Created if
+    missing.
+
 .PARAMETER Country
-    Two-letter storefront code. Defaults to 'us'. Bundle IDs are global, but an
-    app absent from a storefront returns no match there.
+    Two-letter storefront code. Defaults to 'us'.
+
+.PARAMETER Limit
+    Max results per search term. Apple's cap is 200.
 
 .PARAMETER DelayMs
-    Pause between requests. Apple throttles at roughly 20 calls/minute from a
-    single IP; 350ms is a safe default.
+    Pause between requests. Apple throttles at roughly 20 calls/minute per IP.
 
 .EXAMPLE
-    .\Get-AppStoreBundleId.ps1 -Search 'gambling' -Limit 100 |
-        Sort-Object BundleId -Unique | Format-Table Name, BundleId
+    .\Get-AppStoreBundleId.ps1 -Search 'gambling' -Limit 100 -Pick -SaveTo .\bundle-ids-gambling.csv
 
-    Discover apps in any category, then feed the bundle IDs to
-    New-IntuneBlockedAppProfile.ps1. Nothing here is dating-specific.
-
-    Do not filter on PrimaryGenre: the App Store assigns it inconsistently
-    (Tinder, Hinge and Bumble are all 'Lifestyle' while Plenty of Fish is
-    'Social Networking'), so genre filtering silently drops major apps.
+    The whole workflow in one command: search, tick the apps you want in the
+    grid, and they land in the list. Run it again with new search terms to
+    grow the same file.
 
 .EXAMPLE
-    .\Get-AppStoreBundleId.ps1 -AppId 547702041, 930441707
+    .\Get-AppStoreBundleId.ps1 -AppId 547702041 -SaveTo .\bundle-ids.csv
 
-    Resolve store IDs to bundle IDs.
+    Add one known app to a list, no grid.
 
 .EXAMPLE
-    .\Get-AppStoreBundleId.ps1 -BundleId (Get-Content .\bundle-ids.txt) |
+    .\Get-AppStoreBundleId.ps1 -BundleId (Import-Csv .\bundle-ids.csv).BundleId |
         Where-Object Status -ne 'OK'
 
-    Drift check the maintained list. Empty output means no drift; anything
-    returned needs attention.
+    Drift-check a list. Empty output means every entry still resolves.
 
 .NOTES
     Requires Windows PowerShell 5.1 or later. Pure ASCII, no external modules.
+    -Pick needs an interactive desktop session (Out-GridView).
 #>
 [CmdletBinding(DefaultParameterSetName = 'BundleId')]
 param(
@@ -71,16 +78,19 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'AppId')]
     [string[]]$AppId,
 
-    # AllowEmptyString so a list file with blank or commented lines can be
-    # passed straight through Get-Content; the body filters them out. Without
-    # this, binding fails before the body ever runs.
+    # AllowEmptyString so a list with blank entries survives parameter binding;
+    # the body filters them out.
     [Parameter(Mandatory, ParameterSetName = 'BundleId')]
     [AllowEmptyString()]
     [string[]]$BundleId,
 
+    [switch]$Pick,
+
+    [ValidatePattern('\.csv$')]
+    [string]$SaveTo,
+
     [string]$Country = 'us',
 
-    # Max results per search term. Apple's cap is 200.
     [ValidateRange(1, 200)]
     [int]$Limit = 50,
 
@@ -133,68 +143,121 @@ begin {
         }
     }
 
-    $baseUri = 'https://itunes.apple.com'
-    $first   = $true
+    $baseUri   = 'https://itunes.apple.com'
+    $first     = $true
+    # Buffered rather than streamed so -Pick and -SaveTo can act on the whole
+    # result set in the end block.
+    $collected = New-Object System.Collections.Generic.List[object]
 }
 
 process {
-    if ($PSCmdlet.ParameterSetName -eq 'Search') {
-        foreach ($term in $Search) {
-            if (-not $first) { Start-Sleep -Milliseconds $DelayMs }
-            $first = $false
+    switch ($PSCmdlet.ParameterSetName) {
 
-            $encoded = [uri]::EscapeDataString($term)
-            $resp = Invoke-ITunesApi `
-                "$baseUri/search?term=$encoded&country=$Country&entity=software&limit=$Limit"
-            if (-not $resp) { continue }
+        'Search' {
+            foreach ($term in $Search) {
+                if (-not $first) { Start-Sleep -Milliseconds $DelayMs }
+                $first = $false
 
-            Write-Verbose "Search '$term' returned $($resp.resultCount) result(s)."
-            foreach ($r in $resp.results) { ConvertTo-Result $r }
+                $encoded = [uri]::EscapeDataString($term)
+                $resp = Invoke-ITunesApi `
+                    "$baseUri/search?term=$encoded&country=$Country&entity=software&limit=$Limit"
+                if (-not $resp) { continue }
+
+                Write-Verbose "Search '$term' returned $($resp.resultCount) result(s)."
+                foreach ($r in $resp.results) { $collected.Add((ConvertTo-Result $r)) }
+            }
         }
-        return
-    }
 
-    if ($PSCmdlet.ParameterSetName -eq 'AppId') {
-        foreach ($id in $AppId) {
-            if (-not $first) { Start-Sleep -Milliseconds $DelayMs }
-            $first = $false
+        'AppId' {
+            foreach ($id in $AppId) {
+                if (-not $first) { Start-Sleep -Milliseconds $DelayMs }
+                $first = $false
 
-            $resp = Invoke-ITunesApi "$baseUri/lookup?id=$id&country=$Country"
-            if ($resp -and $resp.resultCount -gt 0) {
-                ConvertTo-Result $resp.results[0]
-            } else {
-                [pscustomobject]@{
-                    BundleId = ''; TrackId = $id; Name = ''
-                    Seller = ''; Status = 'NOT FOUND'
+                $resp = Invoke-ITunesApi "$baseUri/lookup?id=$id&country=$Country"
+                if ($resp -and $resp.resultCount -gt 0) {
+                    $collected.Add((ConvertTo-Result $resp.results[0]))
+                } else {
+                    $collected.Add([pscustomobject]@{
+                        BundleId = ''; TrackId = $id; Name = ''; Seller = ''
+                        PrimaryGenre = ''; Rating = ''; Status = 'NOT FOUND'
+                    })
                 }
             }
         }
-        return
-    }
 
-    foreach ($bundle in $BundleId) {
-        $bundle = $bundle.Trim()
-        # Tolerate comment and blank lines so a plain .txt list can be piped in.
-        if (-not $bundle -or $bundle.StartsWith('#')) { continue }
+        'BundleId' {
+            foreach ($bundle in $BundleId) {
+                $bundle = $bundle.Trim()
+                if (-not $bundle -or $bundle.StartsWith('#')) { continue }
 
-        if (-not $first) { Start-Sleep -Milliseconds $DelayMs }
-        $first = $false
+                if (-not $first) { Start-Sleep -Milliseconds $DelayMs }
+                $first = $false
 
-        $resp = Invoke-ITunesApi "$baseUri/lookup?bundleId=$bundle&country=$Country"
-
-        if ($resp -and $resp.resultCount -gt 0) {
-            $out = ConvertTo-Result $resp.results[0]
-            # Apple echoes the queried bundle ID back; a mismatch would mean the
-            # store reassigned it. Surface that rather than reporting OK.
-            if ($out.BundleId -ne $bundle) {
-                $out.Status = "REASSIGNED (now $($out.BundleId))"
-            }
-            $out
-        } else {
-            [pscustomobject]@{
-                BundleId = $bundle; TrackId = ''; Name = ''
-                Seller = ''; Status = 'NO MATCH'
+                $resp = Invoke-ITunesApi "$baseUri/lookup?bundleId=$bundle&country=$Country"
+                if ($resp -and $resp.resultCount -gt 0) {
+                    $out = ConvertTo-Result $resp.results[0]
+                    # Apple echoes the queried bundle ID back; a mismatch means
+                    # the store reassigned it. Surface that, not OK.
+                    if ($out.BundleId -ne $bundle) {
+                        $out.Status = "REASSIGNED (now $($out.BundleId))"
+                    }
+                    $collected.Add($out)
+                } else {
+                    $collected.Add([pscustomobject]@{
+                        BundleId = $bundle; TrackId = ''; Name = ''; Seller = ''
+                        PrimaryGenre = ''; Rating = ''; Status = 'NO MATCH'
+                    })
+                }
             }
         }
     }
+}
+
+end {
+    # De-dupe across search terms before anyone sees the results.
+    # ToArray(), not @(...): wrapping the generic List directly trips an
+    # "Argument types do not match" error under PowerShell 7.5.
+    if ($PSCmdlet.ParameterSetName -eq 'Search') {
+        $results = @($collected.ToArray() | Sort-Object BundleId -Unique)
+    } else {
+        $results = $collected.ToArray()
+    }
+
+    if ($Pick) {
+        $results = @($results |
+            Out-GridView -PassThru -Title 'Select apps (Ctrl/Shift-click, then OK)')
+        if (-not $results) {
+            Write-Warning 'Nothing selected; nothing saved or emitted.'
+            return
+        }
+    }
+
+    if ($SaveTo) {
+        # Merge into the list. Existing entries win, so a re-run never
+        # duplicates or mutates what is already recorded.
+        $list = @{}
+        if (Test-Path $SaveTo) {
+            foreach ($row in (Import-Csv -LiteralPath $SaveTo)) {
+                if ($row.BundleId) { $list[$row.BundleId] = $row }
+            }
+        }
+        $before = $list.Count
+
+        foreach ($r in $results) {
+            $id = "$($r.BundleId)".Trim()
+            if (-not $id -or $r.Status -notmatch '^OK') { continue }
+            if (-not $list.ContainsKey($id)) {
+                $list[$id] = [pscustomobject]@{
+                    BundleId = $id; TrackId = "$($r.TrackId)"; Name = "$($r.Name)"
+                }
+            }
+        }
+
+        $merged = @($list.Values | Sort-Object BundleId |
+            Select-Object BundleId, TrackId, Name)
+        $merged | Export-Csv -LiteralPath $SaveTo -NoTypeInformation -Encoding ASCII
+        Write-Host "Saved: $SaveTo ($($merged.Count) total, $($merged.Count - $before) new)"
+    }
+
+    $results
 }

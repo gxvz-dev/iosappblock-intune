@@ -144,9 +144,17 @@ $tokens = switch ($PSCmdlet.ParameterSetName) {
     'AppId'    { $AppId }
     'BundleId' { $BundleId }
     'File'     {
-        Get-Content -LiteralPath $InputFile |
-            Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') } |
-            ForEach-Object { $_.Trim() }
+        if ([IO.Path]::GetExtension($InputFile) -eq '.csv') {
+            # A list maintained by Save-BundleIdList.ps1 - take its BundleId
+            # column so the CSV feeds this script with no conversion step.
+            Import-Csv -LiteralPath $InputFile |
+                ForEach-Object { "$($_.BundleId)".Trim() } |
+                Where-Object { $_ }
+        } else {
+            Get-Content -LiteralPath $InputFile |
+                Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') } |
+                ForEach-Object { $_.Trim() }
+        }
     }
 }
 
