@@ -1,7 +1,13 @@
 # Apple Top Dating Apps - iOS Bundle IDs
 
+[![verify-lists](https://github.com/gxvz-dev/iosappblock-intune/actions/workflows/verify-lists.yml/badge.svg)](https://github.com/gxvz-dev/iosappblock-intune/actions/workflows/verify-lists.yml)
+
 A verified list of bundle IDs for Apple's top dating apps, plus PowerShell tools
 that turn App Store links into a deployable Microsoft Intune profile.
+
+Every list here is re-verified against the App Store by a monthly scheduled
+check; entries that stop resolving are flagged in an issue, never silently
+kept. Last verified: 2026-07-21.
 
 Intune's "Blocked App Bundle IDs" setting takes bundle IDs, but everything you
 actually have - a store link, an app name - is not one, and Apple publishes no
