@@ -1,0 +1,78 @@
+name: verify-lists
+
+# Monthly drift check: every bundle ID in every list is re-resolved against
+# Apple's public iTunes API. Apps get delisted, renamed and re-released; an
+# entry that no longer resolves is a silent gap that still looks like coverage
+# in the Intune portal. Drift never auto-edits the lists - it opens an issue
+# for a human to judge.
+
+on:
+  schedule:
+    - cron: '17 6 3 * *'   # 06:17 UTC on the 3rd of each month
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Drift-check every list
+        shell: pwsh
+        run: |
+          $failed = @()
+          foreach ($csv in (Get-ChildItem -Path . -Filter 'bundle-ids*.csv')) {
+            Write-Host "== $($csv.Name) =="
+            $ids = (Import-Csv $csv.FullName).BundleId
+            $bad = & ./Get-AppStoreBundleId.ps1 -BundleId $ids |
+                Where-Object Status -ne 'OK'
+            foreach ($b in $bad) {
+              Write-Host "  DRIFT: $($b.BundleId) -> $($b.Status)"
+              $failed += [pscustomobject]@{
+                List = $csv.Name; BundleId = $b.BundleId; Status = $b.Status
+              }
+            }
+          }
+          if ($failed) {
+            $lines = $failed | ForEach-Object {
+              "- ``$($_.BundleId)`` in **$($_.List)**: $($_.Status)"
+            }
+            $body = @(
+              'The scheduled verification found entries that no longer resolve'
+              'against the App Store. Transient API failures are possible, so'
+              're-check manually before removing anything:'
+              ''
+            ) + $lines -join "`n"
+            Set-Content drift-report.md -Value $body
+          }
+          "DRIFT_COUNT=$($failed.Count)" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Open an issue if drift was found
+        if: env.DRIFT_COUNT != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Drift check: $DRIFT_COUNT entr(ies) no longer resolve" \
+            --body-file drift-report.md \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Stamp the verification date into the README
+        shell: pwsh
+        run: |
+          $today = Get-Date -Format 'yyyy-MM-dd'
+          $r = Get-Content README.md -Raw
+          $r = $r -replace 'Last verified: \d{4}-\d{2}-\d{2}', "Last verified: $today"
+          Set-Content README.md -Value $r -NoNewline
+
+      - name: Commit the date stamp
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet || git commit -m "Verify lists against the App Store"
+          git push

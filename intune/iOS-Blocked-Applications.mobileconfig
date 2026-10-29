@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.applicationaccess</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>com.example.restrictions.blockedapps</string>
+            <key>PayloadUUID</key>
+            <string>E54F233D-6636-48BB-8B4C-62AC11CEADF1</string>
+            <key>PayloadDisplayName</key>
+            <string>Restrictions</string>
+            <key>blockedAppBundleIDs</key>
+            <array>
+                <string>co.DilMile.DilMile</string>
+                <string>co.hinge.mobile.ios</string>
+                <string>com.3nder.threender</string>
+                <string>com.affinityapps.blk</string>
+                <string>com.affinityapps.chispa</string>
+                <string>com.badoo.Badoo</string>
+                <string>com.cardify.tinder</string>
+                <string>com.dattch.dattch</string>
+                <string>com.eharmony.singles.SinglesRelease</string>
+                <string>com.grindrguy.grindrx</string>
+                <string>com.hiki.ios</string>
+                <string>com.hily.ios</string>
+                <string>com.match.match.com</string>
+                <string>com.match.stir</string>
+                <string>com.moxco.bumble</string>
+                <string>com.muzmatch.muzmatch</string>
+                <string>com.okcupid.app</string>
+                <string>com.pof.mobileapp.iphone</string>
+                <string>com.shaadi.iphone</string>
+                <string>com.surgeapp.zoe</string>
+                <string>com.taimi.ios</string>
+                <string>com.thursday.thursdayevents.identifier</string>
+                <string>fr.ftw-and-co.whoozer</string>
+                <string>io.cmbus.app</string>
+                <string>org.getpure.pure-iphone</string>
+            </array>
+        </dict>
+    </array>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadIdentifier</key>
+    <string>com.example.restrictions</string>
+    <key>PayloadUUID</key>
+    <string>CE6BC592-D2A0-4408-9689-CAD30C07E87C</string>
+    <key>PayloadDisplayName</key>
+    <string>iOS - Blocked Applications</string>
+    <key>PayloadDescription</key>
+    <string>Blocks the listed app bundle IDs. Requires supervised devices; silently no-ops on unsupervised devices.</string>
+    <key>PayloadRemovalDisallowed</key>
+    <true/>
+</dict>
+</plist>
+
